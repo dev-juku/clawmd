@@ -3,6 +3,8 @@ import type { PromptWorkspaceApi } from "../src/types/api.js";
 
 const api: PromptWorkspaceApi = {
   getRecentFolders: () => ipcRenderer.invoke("app:getRecentFolders"),
+  getFavorites: (rootPath) => ipcRenderer.invoke("app:getFavorites", rootPath),
+  setFavorites: (rootPath, relativePaths) => ipcRenderer.invoke("app:setFavorites", rootPath, relativePaths),
   openFolder: () => ipcRenderer.invoke("workspace:openFolder"),
   scanWorkspace: (rootPath) => ipcRenderer.invoke("workspace:scan", rootPath),
   readFile: (rootPath, filePath) => ipcRenderer.invoke("file:read", rootPath, filePath),

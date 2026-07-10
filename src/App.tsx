@@ -18,6 +18,7 @@ import {
   Save,
   Search,
   SlidersHorizontal,
+  Star,
   Trash2,
   X
 } from "lucide-react";
@@ -257,6 +258,7 @@ export default function App() {
   const [selectionText, setSelectionText] = useState("");
   const [dialog, setDialog] = useState<NameDialogState | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; kind: "file" | "folder"; asset?: PromptAsset; folderRelative?: string } | null>(null);
+  const [favorites, setFavorites] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     void window.promptWorkspace.getRecentFolders().then(setRecentFolders);
@@ -269,6 +271,10 @@ export default function App() {
 
   const visibleAssets = useMemo(() => searchAssets(assets, query), [assets, query]);
   const promptTree = useMemo(() => buildPromptTree(visibleAssets), [visibleAssets]);
+  const pinnedAssets = useMemo(
+    () => assets.filter((asset) => favorites.has(asset.relativePath)).sort((a, b) => a.fileName.localeCompare(b.fileName)),
+    [assets, favorites]
+  );
   const hasNoMarkdownFiles = workspaceRoot !== null && assets.length === 0 && !isScanning;
   const hasNoSearchResults = assets.length > 0 && visibleAssets.length === 0;
 
@@ -293,6 +299,7 @@ export default function App() {
       const scanned = await window.promptWorkspace.scanWorkspace(rootPath);
       setWorkspaceRoot(rootPath);
       setAssets(scanned);
+      setFavorites(new Set(await window.promptWorkspace.getFavorites(rootPath)));
       const preferred =
         selectRelativePath && scanned.some((asset) => asset.relativePath === selectRelativePath)
           ? selectRelativePath
@@ -455,6 +462,42 @@ export default function App() {
     setOpenFolders(new Set());
     setShowInspector(false);
     setSelectionText("");
+    setFavorites(new Set());
+  }
+
+  function persistFavorites(next: Set<string>) {
+    if (workspaceRoot) void window.promptWorkspace.setFavorites(workspaceRoot, [...next]);
+  }
+
+  function toggleFavorite(relativePath: string) {
+    setFavorites((current) => {
+      const next = new Set(current);
+      if (next.has(relativePath)) next.delete(relativePath);
+      else next.add(relativePath);
+      persistFavorites(next);
+      return next;
+    });
+  }
+
+  function renameFavorite(oldRelativePath: string, newRelativePath: string) {
+    setFavorites((current) => {
+      if (!current.has(oldRelativePath)) return current;
+      const next = new Set(current);
+      next.delete(oldRelativePath);
+      next.add(newRelativePath);
+      persistFavorites(next);
+      return next;
+    });
+  }
+
+  function removeFavorite(relativePath: string) {
+    setFavorites((current) => {
+      if (!current.has(relativePath)) return current;
+      const next = new Set(current);
+      next.delete(relativePath);
+      persistFavorites(next);
+      return next;
+    });
   }
 
   function decreaseFontSize() {
@@ -547,6 +590,7 @@ export default function App() {
         ? { ...current, asset: rebindAsset(current.asset, info, current.content) }
         : current
     );
+    renameFavorite(oldRelativePath, info.relativePath);
   }
 
   function promptCreateFile(folderRelative: string) {
@@ -626,6 +670,7 @@ export default function App() {
       const remaining = assets.filter((item) => item.relativePath !== asset.relativePath);
       setAssets(remaining);
       setSelectedPath((current) => (current === asset.relativePath ? remaining[0]?.relativePath ?? null : current));
+      removeFavorite(asset.relativePath);
       setStatus(`Moved ${asset.fileName} to Trash.`);
     } catch (deleteError) {
       setError(errorMessage(deleteError, "Unable to delete file."));
@@ -642,21 +687,32 @@ export default function App() {
     setMenu({ x: event.clientX, y: event.clientY, kind: "folder", folderRelative });
   }
 
+  function selectFile(asset: PromptAsset) {
+    if (isDirty && !confirm("You have unsaved changes. Open another file and discard them?")) return;
+    setSelectedPath(asset.relativePath);
+  }
+
   function renderFileRow(asset: PromptAsset, depth: number) {
+    const favorited = favorites.has(asset.relativePath);
     return (
-      <button
+      <div
         key={asset.relativePath}
         className={`tree-file-row ${asset.relativePath === selectedPath ? "selected" : ""}`}
         style={{ "--tree-depth": depth } as CSSProperties}
-        onClick={() => {
-          if (isDirty && !confirm("You have unsaved changes. Open another file and discard them?")) return;
-          setSelectedPath(asset.relativePath);
-        }}
         onContextMenu={(event) => openFileMenu(event, asset)}
       >
-        <FileText size={13} />
-        <span className="tree-file-title" title={asset.relativePath}>{asset.fileName}</span>
-      </button>
+        <button className="tree-file-open" onClick={() => selectFile(asset)}>
+          <FileText size={13} />
+          <span className="tree-file-title" title={asset.relativePath}>{asset.fileName}</span>
+        </button>
+        <button
+          className={`star-button ${favorited ? "active" : ""}`}
+          title={favorited ? "Unpin" : "Pin"}
+          onClick={() => toggleFavorite(asset.relativePath)}
+        >
+          <Star size={13} />
+        </button>
+      </div>
     );
   }
 
@@ -777,6 +833,26 @@ export default function App() {
         </div>
 
         <div className="asset-list">
+          {pinnedAssets.length > 0 && !query && (
+            <div className="pinned-section">
+              <div className="pinned-heading">Pinned</div>
+              {pinnedAssets.map((asset) => (
+                <div
+                  key={asset.relativePath}
+                  className={`tree-file-row ${asset.relativePath === selectedPath ? "selected" : ""}`}
+                  onContextMenu={(event) => openFileMenu(event, asset)}
+                >
+                  <button className="tree-file-open" onClick={() => selectFile(asset)}>
+                    <FileText size={13} />
+                    <span className="tree-file-title" title={asset.relativePath}>{asset.fileName}</span>
+                  </button>
+                  <button className="star-button active" title="Unpin" onClick={() => toggleFavorite(asset.relativePath)}>
+                    <Star size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           {hasNoMarkdownFiles && (
             <div className="sidebar-empty">
               <strong>No Markdown files</strong>

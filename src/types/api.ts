@@ -8,6 +8,8 @@ export type FileInfo = {
 
 export type PromptWorkspaceApi = {
   getRecentFolders: () => Promise<RecentFolder[]>;
+  getFavorites: (rootPath: string) => Promise<string[]>;
+  setFavorites: (rootPath: string, relativePaths: string[]) => Promise<{ ok: true }>;
   openFolder: () => Promise<string | null>;
   scanWorkspace: (rootPath: string) => Promise<PromptAsset[]>;
   readFile: (rootPath: string, filePath: string) => Promise<{ content: string; lastModified: number }>;

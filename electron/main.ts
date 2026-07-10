@@ -36,15 +36,19 @@ const appStatePath = () => path.join(app.getPath("userData"), "state.json");
 
 type AppState = {
   recentFolders: RecentFolder[];
+  favorites: Record<string, string[]>;
 };
 
 async function readAppState(): Promise<AppState> {
   try {
     const raw = await readFile(appStatePath(), "utf8");
     const parsed = JSON.parse(raw) as Partial<AppState>;
-    return { recentFolders: Array.isArray(parsed.recentFolders) ? parsed.recentFolders : [] };
+    return {
+      recentFolders: Array.isArray(parsed.recentFolders) ? parsed.recentFolders : [],
+      favorites: parsed.favorites && typeof parsed.favorites === "object" ? (parsed.favorites as Record<string, string[]>) : {}
+    };
   } catch {
-    return { recentFolders: [] };
+    return { recentFolders: [], favorites: {} };
   }
 }
 
@@ -60,7 +64,7 @@ async function rememberFolder(folderPath: string) {
     { path: folderPath, name: path.basename(folderPath), openedAt: now },
     ...state.recentFolders.filter((folder) => folder.path !== folderPath)
   ].slice(0, 8);
-  await writeAppState({ recentFolders: next });
+  await writeAppState({ ...state, recentFolders: next });
 }
 
 function createWindow() {
@@ -213,6 +217,23 @@ app.on("open-file", (event, filePath) => {
 
 app.whenReady().then(() => {
   ipcMain.handle("app:getRecentFolders", async () => (await readAppState()).recentFolders);
+
+  ipcMain.handle("app:getFavorites", async (_event, rootPath: string) => {
+    const state = await readAppState();
+    return state.favorites[rootPath] ?? [];
+  });
+
+  ipcMain.handle("app:setFavorites", async (_event, rootPath: string, relativePaths: string[]) => {
+    const state = await readAppState();
+    const favorites = { ...state.favorites };
+    if (Array.isArray(relativePaths) && relativePaths.length > 0) {
+      favorites[rootPath] = relativePaths;
+    } else {
+      delete favorites[rootPath];
+    }
+    await writeAppState({ ...state, favorites });
+    return { ok: true };
+  });
 
   ipcMain.handle("app:getPendingFile", async () => {
     const filePath = pendingOpenFilePath;
