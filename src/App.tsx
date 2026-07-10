@@ -5,24 +5,37 @@ import {
   ChevronRight,
   Clock,
   Edit3,
+  FilePlus,
   FileText,
+  FolderInput,
   FolderOpen,
   Info,
   Minus,
   PanelLeft,
+  Pencil,
   Plus,
   RefreshCw,
   Save,
   Search,
   SlidersHorizontal,
+  Trash2,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent
+} from "react";
 import MarkdownEditor from "./components/MarkdownEditor";
 import { markdownToHtml } from "./shared/markdown";
 import { parsePromptMarkdown } from "./shared/parser";
 import { searchAssets } from "./shared/search";
 import { compilePrompt, hasVariableValue } from "./shared/variables";
+import type { FileInfo } from "./types/api";
 import type { PromptAsset, RecentFolder } from "./types/prompt";
 
 type ActiveTab = "edit" | "rendered" | "compiled";
@@ -177,6 +190,52 @@ function buildPromptTree(assets: PromptAsset[]): PromptTreeFolder {
   return root;
 }
 
+type NameDialogState = {
+  title: string;
+  label: string;
+  initialValue: string;
+  confirmLabel: string;
+  onConfirm: (value: string) => void;
+};
+
+function NameDialog({ title, label, initialValue, confirmLabel, onCancel, onConfirm }: NameDialogState & { onCancel: () => void }) {
+  const [value, setValue] = useState(initialValue);
+  const trimmed = value.trim();
+  return (
+    <div className="modal-scrim" onMouseDown={onCancel}>
+      <div className="modal" onMouseDown={(event) => event.stopPropagation()}>
+        <h3>{title}</h3>
+        <label className="modal-field">
+          <span>{label}</span>
+          <input
+            autoFocus
+            value={value}
+            spellCheck={false}
+            onChange={(event) => setValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && trimmed) {
+                event.preventDefault();
+                onConfirm(trimmed);
+              } else if (event.key === "Escape") {
+                event.preventDefault();
+                onCancel();
+              }
+            }}
+          />
+        </label>
+        <div className="modal-actions">
+          <button className="secondary-button" onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="primary-button compact" disabled={!trimmed} onClick={() => trimmed && onConfirm(trimmed)}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [recentFolders, setRecentFolders] = useState<RecentFolder[]>([]);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
@@ -196,6 +255,8 @@ export default function App() {
   const [openFolders, setOpenFolders] = useState<Set<string>>(() => new Set());
   const [editorFontSize, setEditorFontSize] = useState(14);
   const [selectionText, setSelectionText] = useState("");
+  const [dialog, setDialog] = useState<NameDialogState | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; kind: "file" | "folder"; asset?: PromptAsset; folderRelative?: string } | null>(null);
 
   useEffect(() => {
     void window.promptWorkspace.getRecentFolders().then(setRecentFolders);
@@ -358,6 +419,7 @@ export default function App() {
       }
       if (event.key === "Escape") {
         setShowInspector(false);
+        setMenu(null);
       }
       if ((event.metaKey || event.ctrlKey) && (event.key === "=" || event.key === "+")) {
         event.preventDefault();
@@ -419,6 +481,167 @@ export default function App() {
     });
   }
 
+  function extOf(fileName: string) {
+    const dot = fileName.lastIndexOf(".");
+    return dot >= 0 ? fileName.slice(dot).toLowerCase() : "";
+  }
+
+  function errorMessage(error: unknown, fallback: string) {
+    return error instanceof Error ? error.message : fallback;
+  }
+
+  function assetFromInfo(info: FileInfo, content: string): PromptAsset {
+    const base: PromptAsset = {
+      id: info.relativePath,
+      absolutePath: info.absolutePath,
+      relativePath: info.relativePath,
+      fileName: info.fileName,
+      extension: extOf(info.fileName),
+      title: info.fileName,
+      tags: [],
+      modelTargets: [],
+      promptType: "unknown",
+      variables: [],
+      parseErrors: [],
+      lastModified: Date.now(),
+      sizeBytes: 0,
+      content
+    };
+    return refreshAssetFromContent(base, content, Date.now());
+  }
+
+  function rebindAsset(asset: PromptAsset, info: FileInfo, content: string): PromptAsset {
+    const base: PromptAsset = {
+      ...asset,
+      id: info.relativePath,
+      absolutePath: info.absolutePath,
+      relativePath: info.relativePath,
+      fileName: info.fileName,
+      extension: extOf(info.fileName)
+    };
+    return refreshAssetFromContent(base, content, asset.lastModified);
+  }
+
+  function expandAncestors(relativePath: string) {
+    const parts = relativePath.split(/[\\/]/).filter(Boolean);
+    parts.pop();
+    if (parts.length === 0) return;
+    const paths: string[] = [];
+    let acc = "";
+    for (const part of parts) {
+      acc = acc ? `${acc}/${part}` : part;
+      paths.push(acc);
+    }
+    setOpenFolders((current) => {
+      const next = new Set(current);
+      paths.forEach((path) => next.add(path));
+      return next;
+    });
+  }
+
+  function applyPathChange(oldRelativePath: string, info: FileInfo) {
+    setAssets((current) => current.map((item) => (item.relativePath === oldRelativePath ? rebindAsset(item, info, item.content) : item)));
+    setSelectedPath((current) => (current === oldRelativePath ? info.relativePath : current));
+    setLoadedFile((current) =>
+      current && current.asset.relativePath === oldRelativePath
+        ? { ...current, asset: rebindAsset(current.asset, info, current.content) }
+        : current
+    );
+  }
+
+  function promptCreateFile(folderRelative: string) {
+    setDialog({
+      title: "New Markdown file",
+      label: "File name — you can include a subfolder, e.g. drafts/idea.md",
+      initialValue: "",
+      confirmLabel: "Create",
+      onConfirm: (name) => {
+        setDialog(null);
+        void createFile(folderRelative, name);
+      }
+    });
+  }
+
+  async function createFile(folderRelative: string, name: string) {
+    if (!workspaceRoot) return;
+    if (isDirty && !confirm("You have unsaved changes. Create a new file and discard them?")) return;
+    setError(null);
+    try {
+      const info = await window.promptWorkspace.createFile(workspaceRoot, folderRelative, name);
+      const newAsset = assetFromInfo(info, "");
+      setAssets((current) => (current.some((item) => item.relativePath === info.relativePath) ? current : [...current, newAsset]));
+      expandAncestors(info.relativePath);
+      setSelectedPath(info.relativePath);
+      setStatus(`Created ${info.relativePath}.`);
+    } catch (createError) {
+      setError(errorMessage(createError, "Unable to create file."));
+    }
+  }
+
+  function promptRenameFile(asset: PromptAsset) {
+    setDialog({
+      title: "Rename file",
+      label: "New name",
+      initialValue: asset.fileName,
+      confirmLabel: "Rename",
+      onConfirm: (name) => {
+        setDialog(null);
+        void renameAsset(asset, name);
+      }
+    });
+  }
+
+  async function renameAsset(asset: PromptAsset, name: string) {
+    if (!workspaceRoot) return;
+    setError(null);
+    try {
+      const info = await window.promptWorkspace.renameFile(workspaceRoot, asset.absolutePath, name);
+      applyPathChange(asset.relativePath, info);
+      setStatus(`Renamed to ${info.fileName}.`);
+    } catch (renameError) {
+      setError(errorMessage(renameError, "Unable to rename file."));
+    }
+  }
+
+  async function moveAsset(asset: PromptAsset) {
+    if (!workspaceRoot) return;
+    setError(null);
+    try {
+      const info = await window.promptWorkspace.moveFile(workspaceRoot, asset.absolutePath);
+      if (!info) return;
+      applyPathChange(asset.relativePath, info);
+      expandAncestors(info.relativePath);
+      setStatus(`Moved to ${info.relativePath}.`);
+    } catch (moveError) {
+      setError(errorMessage(moveError, "Unable to move file."));
+    }
+  }
+
+  async function deleteAsset(asset: PromptAsset) {
+    if (!workspaceRoot) return;
+    if (!confirm(`Move "${asset.fileName}" to the Trash?`)) return;
+    setError(null);
+    try {
+      await window.promptWorkspace.deleteFile(workspaceRoot, asset.absolutePath);
+      const remaining = assets.filter((item) => item.relativePath !== asset.relativePath);
+      setAssets(remaining);
+      setSelectedPath((current) => (current === asset.relativePath ? remaining[0]?.relativePath ?? null : current));
+      setStatus(`Moved ${asset.fileName} to Trash.`);
+    } catch (deleteError) {
+      setError(errorMessage(deleteError, "Unable to delete file."));
+    }
+  }
+
+  function openFileMenu(event: ReactMouseEvent, asset: PromptAsset) {
+    event.preventDefault();
+    setMenu({ x: event.clientX, y: event.clientY, kind: "file", asset });
+  }
+
+  function openFolderMenu(event: ReactMouseEvent, folderRelative: string) {
+    event.preventDefault();
+    setMenu({ x: event.clientX, y: event.clientY, kind: "folder", folderRelative });
+  }
+
   function renderFileRow(asset: PromptAsset, depth: number) {
     return (
       <button
@@ -429,6 +652,7 @@ export default function App() {
           if (isDirty && !confirm("You have unsaved changes. Open another file and discard them?")) return;
           setSelectedPath(asset.relativePath);
         }}
+        onContextMenu={(event) => openFileMenu(event, asset)}
       >
         <FileText size={13} />
         <span className="tree-file-title" title={asset.relativePath}>{asset.fileName}</span>
@@ -440,7 +664,12 @@ export default function App() {
     const collapsed = !openFolders.has(folder.path) && !query;
     return (
       <div className="tree-folder" key={folder.path}>
-        <button className="tree-folder-row" style={{ "--tree-depth": depth } as CSSProperties} onClick={() => toggleFolder(folder.path)}>
+        <button
+          className="tree-folder-row"
+          style={{ "--tree-depth": depth } as CSSProperties}
+          onClick={() => toggleFolder(folder.path)}
+          onContextMenu={(event) => openFolderMenu(event, folder.path)}
+        >
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           <span>{folder.name}</span>
           <small>{folder.count}</small>
@@ -525,6 +754,9 @@ export default function App() {
           <button className="workspace-title-button" title="Home" onClick={goHome}>
             <span className="eyebrow">Workspace</span>
             <strong title={workspaceRoot}>{workspaceRoot.split(/[\\/]/).pop()}</strong>
+          </button>
+          <button className="icon-button" title="New file" onClick={() => promptCreateFile("")}>
+            <FilePlus size={18} />
           </button>
           <button className="icon-button" title="Open folder" onClick={openFolder}>
             <FolderOpen size={18} />
@@ -773,6 +1005,63 @@ export default function App() {
         </div>
       </section>
 
+      {menu && (
+        <div
+          className="context-scrim"
+          onMouseDown={() => setMenu(null)}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            setMenu(null);
+          }}
+        >
+          <div className="context-menu" style={{ left: menu.x, top: menu.y }} onMouseDown={(event) => event.stopPropagation()}>
+            {menu.kind === "file" && menu.asset ? (
+              <>
+                <button
+                  onClick={() => {
+                    const target = menu.asset!;
+                    setMenu(null);
+                    promptRenameFile(target);
+                  }}
+                >
+                  <Pencil size={14} /> Rename…
+                </button>
+                <button
+                  onClick={() => {
+                    const target = menu.asset!;
+                    setMenu(null);
+                    void moveAsset(target);
+                  }}
+                >
+                  <FolderInput size={14} /> Move to folder…
+                </button>
+                <button
+                  className="danger"
+                  onClick={() => {
+                    const target = menu.asset!;
+                    setMenu(null);
+                    void deleteAsset(target);
+                  }}
+                >
+                  <Trash2 size={14} /> Delete
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => {
+                  const folderRelative = menu.folderRelative ?? "";
+                  setMenu(null);
+                  promptCreateFile(folderRelative);
+                }}
+              >
+                <FilePlus size={14} /> New file here…
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {dialog && <NameDialog {...dialog} onCancel={() => setDialog(null)} />}
     </main>
   );
 }

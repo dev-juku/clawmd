@@ -1,9 +1,17 @@
-import { app, BrowserWindow, dialog, ipcMain, type OpenDialogOptions } from "electron";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { app, BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from "electron";
+import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parsePromptMarkdown } from "../src/shared/parser.js";
 import type { PromptAsset, RecentFolder } from "../src/types/prompt.js";
+import {
+  assertInsideRoot,
+  isMarkdownFile,
+  resolveCreateTarget,
+  resolveMoveTarget,
+  resolveRenameTarget,
+  toFileInfo
+} from "./fileOps.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const noisyDirectories = new Set([
@@ -20,7 +28,6 @@ const noisyDirectories = new Set([
   "out",
   "vendor"
 ]);
-const markdownExtensions = new Set([".md", ".markdown"]);
 
 let mainWindow: BrowserWindow | null = null;
 let pendingOpenFilePath: string | null = null;
@@ -78,17 +85,14 @@ function createWindow() {
   }
 }
 
-function assertInsideRoot(rootPath: string, filePath: string) {
-  const resolvedRoot = path.resolve(rootPath);
-  const resolvedFile = path.resolve(filePath);
-  const relative = path.relative(resolvedRoot, resolvedFile);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error("File access is outside the opened workspace.");
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await stat(target);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
   }
-}
-
-function isMarkdownFile(filePath: string) {
-  return markdownExtensions.has(path.extname(filePath).toLowerCase());
 }
 
 async function scanDirectory(rootPath: string): Promise<PromptAsset[]> {
@@ -261,6 +265,46 @@ app.whenReady().then(() => {
       ok: true,
       lastModified: savedStats.mtimeMs
     };
+  });
+
+  ipcMain.handle("file:create", async (_event, rootPath: string, folderRelative: string, rawName: string) => {
+    const target = resolveCreateTarget(rootPath, folderRelative, rawName);
+    if (await pathExists(target)) throw new Error("A file with that name already exists.");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, "", { encoding: "utf8", flag: "wx" });
+    return toFileInfo(rootPath, target);
+  });
+
+  ipcMain.handle("file:rename", async (_event, rootPath: string, filePath: string, rawName: string) => {
+    const target = resolveRenameTarget(rootPath, filePath, rawName);
+    if (path.resolve(target) !== path.resolve(filePath) && (await pathExists(target))) {
+      throw new Error("A file with that name already exists.");
+    }
+    await rename(filePath, target);
+    return toFileInfo(rootPath, target);
+  });
+
+  ipcMain.handle("file:move", async (_event, rootPath: string, filePath: string) => {
+    assertInsideRoot(rootPath, filePath);
+    const options: OpenDialogOptions = {
+      properties: ["openDirectory"],
+      defaultPath: path.dirname(filePath),
+      title: "Move to folder",
+      message: "Choose a folder inside this workspace"
+    };
+    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const target = resolveMoveTarget(rootPath, filePath, result.filePaths[0]);
+    if (path.resolve(target) === path.resolve(filePath)) return null;
+    if (await pathExists(target)) throw new Error("A file with that name already exists in the target folder.");
+    await rename(filePath, target);
+    return toFileInfo(rootPath, target);
+  });
+
+  ipcMain.handle("file:delete", async (_event, rootPath: string, filePath: string) => {
+    assertInsideRoot(rootPath, filePath);
+    await shell.trashItem(filePath);
+    return { ok: true };
   });
 
   // Cold start via argv (Windows/Linux; macOS delivers through open-file).

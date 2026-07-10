@@ -1,5 +1,11 @@
 import type { PromptAsset, RecentFolder } from "./prompt.js";
 
+export type FileInfo = {
+  absolutePath: string;
+  relativePath: string;
+  fileName: string;
+};
+
 export type PromptWorkspaceApi = {
   getRecentFolders: () => Promise<RecentFolder[]>;
   openFolder: () => Promise<string | null>;
@@ -13,4 +19,8 @@ export type PromptWorkspaceApi = {
     content: string,
     expectedModified: number | null
   ) => Promise<{ ok: true; lastModified: number } | { ok: false; reason: "modified_on_disk"; lastModified: number }>;
+  createFile: (rootPath: string, folderRelative: string, name: string) => Promise<FileInfo>;
+  renameFile: (rootPath: string, filePath: string, newName: string) => Promise<FileInfo>;
+  moveFile: (rootPath: string, filePath: string) => Promise<FileInfo | null>;
+  deleteFile: (rootPath: string, filePath: string) => Promise<{ ok: true }>;
 };
