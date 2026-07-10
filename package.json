@@ -1,6 +1,6 @@
 {
   "name": "clawmd",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local-first Markdown prompt workspace.",
   "author": "Rahul Singh",
   "license": "MIT",
@@ -11,8 +11,8 @@
     "dev": "node scripts/dev.mjs",
     "build": "tsc -p tsconfig.node.json && tsc -p tsconfig.renderer.json && vite build",
     "icon:mac": "node scripts/build-mac-icon.mjs",
-    "pack:mac": "pnpm build && electron-builder --mac dir",
-    "dist:mac": "pnpm build && electron-builder --mac dmg zip",
+    "pack:mac": "pnpm icon:mac && pnpm build && electron-builder --mac dir",
+    "dist:mac": "pnpm icon:mac && pnpm build && electron-builder --mac dmg zip",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.renderer.json"

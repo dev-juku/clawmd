@@ -5,3 +5,4 @@ dist-renderer/
 release/
 .vite/
 *.log
+assets/icon.icns
