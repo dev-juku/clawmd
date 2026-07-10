@@ -961,6 +961,7 @@ export default function App() {
                   value={loadedFile?.content ?? ""}
                   disabled={!loadedFile}
                   fontSizePx={editorFontSize}
+                  sampleValues={sampleValues}
                   onChange={updateContent}
                   onSelectionChange={setSelectionText}
                 />
