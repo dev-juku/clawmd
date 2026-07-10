@@ -1,10 +1,36 @@
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
+import {
+  codeFolding,
+  foldGutter,
+  foldKeymap,
+  foldService,
+  HighlightStyle,
+  syntaxHighlighting
+} from "@codemirror/language";
+import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/search";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
-import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { useEffect, useRef } from "react";
+
+// Fold a Markdown heading down to just before the next heading of the same or a
+// higher level, so long prompts can be collapsed section by section.
+const markdownFolding = foldService.of((state, lineStart) => {
+  const line = state.doc.lineAt(lineStart);
+  const match = /^(#{1,6})\s/.exec(line.text);
+  if (!match) return null;
+  const level = match[1].length;
+  let endLine = line.number;
+  for (let n = line.number + 1; n <= state.doc.lines; n++) {
+    const heading = /^(#{1,6})\s/.exec(state.doc.line(n).text);
+    if (heading && heading[1].length <= level) break;
+    endLine = n;
+  }
+  if (endLine === line.number) return null;
+  return { from: line.to, to: state.doc.line(endLine).to };
+});
 
 const editable = new Compartment();
 const fontSize = new Compartment();
@@ -38,6 +64,33 @@ const theme = EditorView.theme({
   },
   ".cm-activeLineGutter": {
     background: "#e6edf8"
+  },
+  ".cm-panels": {
+    background: "#f3f4f2",
+    color: "#1f2328"
+  },
+  ".cm-panels.cm-panels-top": {
+    borderBottom: "1px solid #dfe3e6"
+  },
+  ".cm-panel.cm-search": {
+    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif",
+    padding: "6px 10px"
+  },
+  ".cm-panel.cm-search input, .cm-panel.cm-search button, .cm-panel.cm-search label": {
+    fontSize: "12px"
+  },
+  ".cm-searchMatch": {
+    backgroundColor: "#fdeab0"
+  },
+  ".cm-searchMatch-selected": {
+    backgroundColor: "#ffcf5a"
+  },
+  ".cm-selectionMatch": {
+    backgroundColor: "#dbe7ff"
+  },
+  ".cm-foldGutter .cm-gutterElement": {
+    color: "#9aa4ad",
+    cursor: "pointer"
   }
 });
 
@@ -75,14 +128,27 @@ export default function MarkdownEditor({ value, disabled = false, fontSizePx, on
         doc: value,
         extensions: [
           lineNumbers(),
+          foldGutter(),
           markdown(),
           EditorView.lineWrapping,
           theme,
           fontSize.of(EditorView.theme({ "&": { fontSize: `${fontSizePx}px` } })),
           syntaxHighlighting(highlightStyle),
+          codeFolding(),
+          markdownFolding,
+          closeBrackets(),
+          search({ top: true }),
+          highlightSelectionMatches(),
           editable.of(EditorView.editable.of(!disabled)),
           historyField.of(history()),
-          keymap.of([indentWithTab, ...historyKeymap, ...defaultKeymap]),
+          keymap.of([
+            indentWithTab,
+            ...closeBracketsKeymap,
+            ...searchKeymap,
+            ...foldKeymap,
+            ...historyKeymap,
+            ...defaultKeymap
+          ]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
             if (update.selectionSet || update.docChanged) {
