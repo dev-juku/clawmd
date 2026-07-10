@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, shell, type OpenDialogOptions } from "electron";
+import type { Dirent } from "node:fs";
 import { mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -67,6 +68,18 @@ async function rememberFolder(folderPath: string) {
   await writeAppState({ ...state, recentFolders: next });
 }
 
+async function forgetFolder(folderPath: string) {
+  const state = await readAppState();
+  await writeAppState({
+    ...state,
+    recentFolders: state.recentFolders.filter((folder) => folder.path !== folderPath)
+  });
+}
+
+function permissionMessage(rootPath: string) {
+  return `ClawMD doesn't have permission to read "${path.basename(rootPath)}". On macOS, grant access in System Settings → Privacy & Security → Files and Folders (or Full Disk Access), then reopen the folder.`;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1120,
@@ -102,15 +115,24 @@ async function pathExists(target: string): Promise<boolean> {
 async function scanDirectory(rootPath: string): Promise<PromptAsset[]> {
   const assets: PromptAsset[] = [];
 
-  async function visit(directoryPath: string) {
-    const entries = await readdir(directoryPath, { withFileTypes: true });
+  async function visit(directoryPath: string, isRoot: boolean) {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(directoryPath, { withFileTypes: true });
+    } catch (error) {
+      // Surface a failure to read the root so the handler can explain it; skip
+      // any sub-directory we cannot read (permissions, races) rather than
+      // failing the whole scan.
+      if (isRoot) throw error;
+      return;
+    }
     await Promise.all(
       entries.map(async (entry) => {
         const absolutePath = path.join(directoryPath, entry.name);
         if (entry.isDirectory()) {
           if (noisyDirectories.has(entry.name)) return;
           if (entry.name.startsWith(".")) return;
-          await visit(absolutePath);
+          await visit(absolutePath, false);
           return;
         }
 
@@ -162,7 +184,7 @@ async function scanDirectory(rootPath: string): Promise<PromptAsset[]> {
     );
   }
 
-  await visit(rootPath);
+  await visit(rootPath, true);
   return assets.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 }
 
@@ -254,10 +276,27 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle("workspace:scan", async (_event, rootPath: string) => {
-    const rootStats = await stat(rootPath);
+    let rootStats;
+    try {
+      rootStats = await stat(rootPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        await forgetFolder(rootPath);
+        throw new Error("That folder no longer exists — it has been removed from Recent.");
+      }
+      if (code === "EPERM" || code === "EACCES") throw new Error(permissionMessage(rootPath));
+      throw error;
+    }
     if (!rootStats.isDirectory()) throw new Error("Workspace root is not a directory.");
     await rememberFolder(rootPath);
-    return scanDirectory(rootPath);
+    try {
+      return await scanDirectory(rootPath);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") throw new Error(permissionMessage(rootPath));
+      throw error;
+    }
   });
 
   ipcMain.handle("file:read", async (_event, rootPath: string, filePath: string) => {

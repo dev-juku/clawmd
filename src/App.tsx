@@ -310,6 +310,7 @@ export default function App() {
     } catch (scanError) {
       setError(scanError instanceof Error ? scanError.message : "Unable to scan workspace.");
       setStatus("Scan failed.");
+      setRecentFolders(await window.promptWorkspace.getRecentFolders());
     } finally {
       setIsScanning(false);
     }

@@ -61,7 +61,13 @@
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "assets/icon.icns",
-      "identity": null
+      "identity": null,
+      "extendInfo": {
+        "NSDocumentsFolderUsageDescription": "ClawMD opens local folders of Markdown prompt files that you choose.",
+        "NSDesktopFolderUsageDescription": "ClawMD opens local folders of Markdown prompt files that you choose.",
+        "NSDownloadsFolderUsageDescription": "ClawMD opens local folders of Markdown prompt files that you choose.",
+        "NSRemovableVolumesUsageDescription": "ClawMD opens local folders of Markdown prompt files that you choose."
+      }
     },
     "dmg": {
       "artifactName": "${productName}-${version}-${arch}.${ext}"
