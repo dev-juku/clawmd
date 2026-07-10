@@ -64,6 +64,14 @@
     },
     "dmg": {
       "artifactName": "${productName}-${version}-${arch}.${ext}"
-    }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["md", "markdown"],
+        "name": "Markdown Document",
+        "role": "Editor",
+        "rank": "Alternate"
+      }
+    ]
   }
 }

@@ -17,7 +17,7 @@ import {
   SlidersHorizontal,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import MarkdownEditor from "./components/MarkdownEditor";
 import { markdownToHtml } from "./shared/markdown";
 import { parsePromptMarkdown } from "./shared/parser";
@@ -224,7 +224,7 @@ export default function App() {
   const fileStats = useMemo(() => countTextStats(statsText), [statsText]);
   const selectionStats = useMemo(() => (selectionText ? countTextStats(selectionText) : null), [selectionText]);
 
-  async function scanWorkspace(rootPath: string) {
+  async function scanWorkspace(rootPath: string, selectRelativePath?: string) {
     setIsScanning(true);
     setError(null);
     setStatus("Scanning Markdown prompt files...");
@@ -232,7 +232,11 @@ export default function App() {
       const scanned = await window.promptWorkspace.scanWorkspace(rootPath);
       setWorkspaceRoot(rootPath);
       setAssets(scanned);
-      setSelectedPath(scanned[0]?.relativePath ?? null);
+      const preferred =
+        selectRelativePath && scanned.some((asset) => asset.relativePath === selectRelativePath)
+          ? selectRelativePath
+          : scanned[0]?.relativePath ?? null;
+      setSelectedPath(preferred);
       setStatus(`${scanned.length} Markdown prompt${scanned.length === 1 ? "" : "s"} found.`);
       setRecentFolders(await window.promptWorkspace.getRecentFolders());
     } catch (scanError) {
@@ -248,6 +252,33 @@ export default function App() {
     const folder = await window.promptWorkspace.openFolder();
     if (folder) await scanWorkspace(folder);
   }
+
+  // Open a single Markdown file (e.g. via "Open with ClawMD"): use its containing
+  // folder as the workspace and pre-select the file.
+  async function openFilePath(absolutePath: string) {
+    const separator = absolutePath.lastIndexOf("/") >= absolutePath.lastIndexOf("\\")
+      ? absolutePath.lastIndexOf("/")
+      : absolutePath.lastIndexOf("\\");
+    if (separator <= 0) return;
+    const root = absolutePath.slice(0, separator);
+    const fileName = absolutePath.slice(separator + 1);
+    if (!root || !fileName) return;
+    if (isDirty && !confirm("You have unsaved changes. Open the incoming file and discard them?")) return;
+    await scanWorkspace(root, fileName);
+  }
+
+  const openFilePathRef = useRef(openFilePath);
+  openFilePathRef.current = openFilePath;
+
+  useEffect(() => {
+    const dispose = window.promptWorkspace.onOpenFile((filePath) => {
+      void openFilePathRef.current(filePath);
+    });
+    void window.promptWorkspace.getPendingFile().then((filePath) => {
+      if (filePath) void openFilePathRef.current(filePath);
+    });
+    return dispose;
+  }, []);
 
   async function rescanWorkspace() {
     if (!workspaceRoot) return;

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { PromptWorkspaceApi } from "../src/types/api.js";
 
 const api: PromptWorkspaceApi = {
@@ -7,7 +7,13 @@ const api: PromptWorkspaceApi = {
   scanWorkspace: (rootPath) => ipcRenderer.invoke("workspace:scan", rootPath),
   readFile: (rootPath, filePath) => ipcRenderer.invoke("file:read", rootPath, filePath),
   writeFile: (rootPath, filePath, content, expectedModified) =>
-    ipcRenderer.invoke("file:write", rootPath, filePath, content, expectedModified)
+    ipcRenderer.invoke("file:write", rootPath, filePath, content, expectedModified),
+  getPendingFile: () => ipcRenderer.invoke("app:getPendingFile"),
+  onOpenFile: (callback) => {
+    const listener = (_event: IpcRendererEvent, filePath: string) => callback(filePath);
+    ipcRenderer.on("file:open", listener);
+    return () => ipcRenderer.removeListener("file:open", listener);
+  }
 };
 
 contextBridge.exposeInMainWorld("promptWorkspace", api);

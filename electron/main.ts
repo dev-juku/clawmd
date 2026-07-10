@@ -23,6 +23,7 @@ const noisyDirectories = new Set([
 const markdownExtensions = new Set([".md", ".markdown"]);
 
 let mainWindow: BrowserWindow | null = null;
+let pendingOpenFilePath: string | null = null;
 
 const appStatePath = () => path.join(app.getPath("userData"), "state.json");
 
@@ -157,8 +158,63 @@ async function scanDirectory(rootPath: string): Promise<PromptAsset[]> {
   return assets.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 }
 
+function focusWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+}
+
+function extractMarkdownArg(argv: string[], cwd: string): string | null {
+  for (const arg of argv) {
+    if (!arg || arg.startsWith("-")) continue;
+    if (isMarkdownFile(arg)) return path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
+  }
+  return null;
+}
+
+function deliverOpenFile(filePath: string) {
+  if (!isMarkdownFile(filePath)) return;
+  pendingOpenFilePath = filePath;
+  const webContents = mainWindow?.webContents;
+  if (webContents && !webContents.isLoading()) {
+    webContents.send("file:open", filePath);
+    pendingOpenFilePath = null;
+  }
+  focusWindow();
+}
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
+
+// Windows/Linux: a second launch (e.g. "Open with ClawMD") reuses this instance.
+app.on("second-instance", (_event, argv, workingDirectory) => {
+  if (!mainWindow) createWindow();
+  const filePath = extractMarkdownArg(argv, workingDirectory);
+  if (filePath) deliverOpenFile(filePath);
+  else focusWindow();
+});
+
+// macOS: fired when a Markdown file is opened via Finder/dock, possibly before ready.
+app.on("open-file", (event, filePath) => {
+  event.preventDefault();
+  if (!isMarkdownFile(filePath)) return;
+  if (!app.isReady()) {
+    pendingOpenFilePath = filePath;
+    return;
+  }
+  if (!mainWindow) createWindow();
+  deliverOpenFile(filePath);
+});
+
 app.whenReady().then(() => {
   ipcMain.handle("app:getRecentFolders", async () => (await readAppState()).recentFolders);
+
+  ipcMain.handle("app:getPendingFile", async () => {
+    const filePath = pendingOpenFilePath;
+    pendingOpenFilePath = null;
+    return filePath;
+  });
 
   ipcMain.handle("workspace:openFolder", async () => {
     const options: OpenDialogOptions = {
@@ -206,6 +262,12 @@ app.whenReady().then(() => {
       lastModified: savedStats.mtimeMs
     };
   });
+
+  // Cold start via argv (Windows/Linux; macOS delivers through open-file).
+  if (!pendingOpenFilePath) {
+    const argFile = extractMarkdownArg(process.argv, process.cwd());
+    if (argFile) pendingOpenFilePath = argFile;
+  }
 
   createWindow();
 

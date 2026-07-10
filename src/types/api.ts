@@ -5,6 +5,8 @@ export type PromptWorkspaceApi = {
   openFolder: () => Promise<string | null>;
   scanWorkspace: (rootPath: string) => Promise<PromptAsset[]>;
   readFile: (rootPath: string, filePath: string) => Promise<{ content: string; lastModified: number }>;
+  getPendingFile: () => Promise<string | null>;
+  onOpenFile: (callback: (filePath: string) => void) => () => void;
   writeFile: (
     rootPath: string,
     filePath: string,
