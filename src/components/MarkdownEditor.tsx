@@ -1,4 +1,4 @@
-import { defaultKeymap, indentWithTab } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
@@ -8,6 +8,7 @@ import { useEffect, useRef } from "react";
 
 const editable = new Compartment();
 const fontSize = new Compartment();
+const historyField = new Compartment();
 const theme = EditorView.theme({
   "&": {
     height: "100%",
@@ -80,7 +81,8 @@ export default function MarkdownEditor({ value, disabled = false, fontSizePx, on
           fontSize.of(EditorView.theme({ "&": { fontSize: `${fontSizePx}px` } })),
           syntaxHighlighting(highlightStyle),
           editable.of(EditorView.editable.of(!disabled)),
-          keymap.of([indentWithTab, ...defaultKeymap]),
+          historyField.of(history()),
+          keymap.of([indentWithTab, ...historyKeymap, ...defaultKeymap]),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChangeRef.current(update.state.doc.toString());
             if (update.selectionSet || update.docChanged) {
@@ -105,9 +107,13 @@ export default function MarkdownEditor({ value, disabled = false, fontSizePx, on
     if (!view) return;
     const currentValue = view.state.doc.toString();
     if (currentValue !== value) {
+      // External content (loading/switching files or an on-disk reload): replace
+      // the doc and reset undo history so undo can't cross into the previous file.
       view.dispatch({
-        changes: { from: 0, to: currentValue.length, insert: value }
+        changes: { from: 0, to: currentValue.length, insert: value },
+        effects: historyField.reconfigure([])
       });
+      view.dispatch({ effects: historyField.reconfigure(history()) });
     }
   }, [value]);
 
